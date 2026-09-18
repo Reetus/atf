@@ -94,6 +94,23 @@ echo "== past times =="
 run_rc "explicit past date is refused" 1 "$ATF" -p "2020-01-01 00:00"
 run_rc "force runs past date now" 0 "$ATF" -f -p "2020-01-01 00:00"
 
+# All clock-time forms roll forward instead of erroring, including military
+# time (regression: "atf 0200" once failed as a past time).
+now2=$("$ATF" -p now)
+rolled=$("$ATF" -p 0200 2>/dev/null)
+if [ -n "$rolled" ] && [ "$rolled" -ge "$((now2 - 2))" ]; then
+    t_ok
+else
+    t_fail "military time 0200 rolls forward (got '$rolled')"
+fi
+
+far=$(TZ=Pacific/Kiritimati "$ATF" -p 0000 2>/dev/null)
+if [ -n "$far" ] && [ "$far" -gt "$now2" ] && [ $((far - now2)) -le 90000 ]; then
+    t_ok
+else
+    t_fail "military midnight rolls in UTC+14 (got '$far')"
+fi
+
 echo "== execution =="
 run_rc "exec true" 0 "$ATF" -q now -- true
 run_rc "exec false" 1 "$ATF" -q now -- false

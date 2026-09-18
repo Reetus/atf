@@ -25,7 +25,7 @@ Handled by gnulib's `parse-datetime` (the parser used by GNU `at` and
 
 | Input | Meaning |
 | --- | --- |
-| `23:00`, `4pm`, `noon`, `midnight` | clock time |
+| `23:00`, `4pm`, `0200`, `noon`, `midnight` | clock time |
 | `2026-10-26 23:00+07:00`, `2026-10-26T23:00:00Z` | ISO 8601 with offset |
 | `tomorrow 23:00`, `next monday`, `2 days ago` | relative words |
 | `+2 hours`, `+90 minutes` | relative to now |

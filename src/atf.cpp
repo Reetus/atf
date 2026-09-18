@@ -61,7 +61,7 @@ usage (FILE *out)
     "Wait until TIME, then run COMMAND; with no COMMAND, just exit.\n"
     "\n"
     "TIME accepts the same loose grammar as GNU date -d / at, e.g.\n"
-    "  23:00                       today, or tomorrow if already past\n"
+    "  23:00, 0200, midnight       today, or tomorrow if already past\n"
     "  '2026-10-26 23:00+07:00'    explicit UTC offset\n"
     "  2026-10-26T23:00:00Z        ISO 8601\n"
     "  'tomorrow 23:00'            relative words\n"
@@ -106,42 +106,38 @@ lower (std::string s)
   return s;
 }
 
-// True when TIME looks like a bare clock time ("23:00", "4pm", "midnight").
-// Such a time in the past means the next day, matching at(1).
+// True when TIME consists only of clock-time tokens: "23:00", "4pm",
+// "0200" (military), "midnight", "14:00:00.5". Such a time in the past
+// means the next day, matching at(1).
 bool
-is_bare_time_of_day (std::string s)
+is_time_of_day (std::string s)
 {
   s = lower (trim (s));
-
-  bool ampm = false;
-  static char const *const suffixes[] = { "a.m.", "p.m.", "am", "pm" };
-  for (char const *suffix : suffixes)
-    {
-      size_t n = strlen (suffix);
-      if (s.size () > n && s.compare (s.size () - n, n, suffix) == 0)
-        {
-          s = trim (s.substr (0, s.size () - n));
-          ampm = true;
-          break;
-        }
-    }
-
-  if (s == "noon" || s == "midnight")
-    return true;
   if (s.empty ())
     return false;
 
-  int colons = 0;
-  for (char c : s)
+  size_t i = 0;
+  while (i < s.size ())
     {
-      if (c == ':')
-        colons++;
-      else if (!isdigit ((unsigned char) c))
-        return false;
+      while (i < s.size () && isspace ((unsigned char) s[i]))
+        i++;
+      if (i == s.size ())
+        break;
+      size_t start = i;
+      while (i < s.size () && !isspace ((unsigned char) s[i]))
+        i++;
+      std::string w = s.substr (start, i - start);
+
+      if (w == "am" || w == "pm" || w == "a.m." || w == "p.m."
+          || w == "o'clock" || w == "oclock" || w == "noon"
+          || w == "midnight")
+        continue;
+
+      for (char c : w)
+        if (!isdigit ((unsigned char) c) && c != ':' && c != '.')
+          return false;
     }
-  if (colons > 2)
-    return false;
-  return colons > 0 || ampm;
+  return true;
 }
 
 int
@@ -302,7 +298,7 @@ main (int argc, char **argv)
                           + (now.tv_nsec - target.tv_nsec);
       if (late_ns <= 1000000000LL)
         immediate = true;
-      else if (is_bare_time_of_day (time_str))
+      else if (is_time_of_day (time_str))
         {
           std::string next = "tomorrow " + time_str;
           if (!parse_datetime (&target, next.c_str (), nullptr)
