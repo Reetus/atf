@@ -1,0 +1,20 @@
+Vendored from GNU coreutils 9.4, lib/* (gnulib parse-datetime module).
+Source: https://ftp.gnu.org/gnu/coreutils/coreutils-9.4.tar.xz
+SHA256: ea613a4cf44612326e917201bbbcdfbd301de21ffc3b59b6e5c07e040b275e52
+
+Files are extracted verbatim by tools/vendor-parse-datetime.sh, except:
+  config.h    generated from config.hin, with a short list of platform
+              HAVE_* macros set to 1 and the time_rz declarations appended
+  config.hin  verbatim copy, kept for provenance/regeneration
+
+Not vendored (replaced by small shims in third_party/compat):
+  time_rz.c   -> timezone_t/tzalloc/mktime_z/localtime_rz using the
+                 process TZ environment
+  nstrftime   -> system strftime (debug output only; parse_datetime2 flags
+                 are not exposed by atf)
+  gettext     -> identity macros
+
+parse-datetime.y is GPL-3.0-or-later as distributed by the GNU project
+(gnulib module metadata lists LGPL-2.1-or-later; atf follows the stricter
+file headers). parse-datetime.c is the Bison-generated parser shipped in the
+coreutils release tarball; it is distributed with Bison's special exception.
