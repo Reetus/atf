@@ -62,6 +62,7 @@ usage (FILE *out)
     "\n"
     "TIME accepts the same loose grammar as GNU date -d / at, e.g.\n"
     "  23:00, 0200, midnight       today, or tomorrow if already past\n"
+    "  :55                         next time the clock reaches :55\n"
     "  '2026-10-26 23:00+07:00'    explicit UTC offset\n"
     "  2026-10-26T23:00:00Z        ISO 8601\n"
     "  'tomorrow 23:00'            relative words\n"
@@ -137,6 +138,72 @@ is_time_of_day (std::string s)
         if (!isdigit ((unsigned char) c) && c != ':' && c != '.')
           return false;
     }
+  return true;
+}
+
+struct timespec now_timespec ();
+
+// Parse ":MM" or ":MM:SS" as the next time the clock reaches that minute
+// (and second) within the next hour, in the TZ environment's zone. This
+// shorthand is an atf extension; the date grammar cannot express it.
+bool
+next_minute_of_hour (std::string s, struct timespec *out)
+{
+  s = trim (s);
+  if (s.empty () || s[0] != ':')
+    return false;
+
+  size_t i = 1;
+  size_t start = i;
+  int minute = 0;
+  while (i < s.size () && isdigit ((unsigned char) s[i]))
+    {
+      minute = minute * 10 + (s[i] - '0');
+      i++;
+    }
+  if (i == start || i - start > 2 || minute > 59)
+    return false;
+
+  int second = 0;
+  if (i < s.size ())
+    {
+      if (s[i] != ':')
+        return false;
+      i++;
+      start = i;
+      while (i < s.size () && isdigit ((unsigned char) s[i]))
+        {
+          second = second * 10 + (s[i] - '0');
+          i++;
+        }
+      if (i == start || i - start > 2 || second > 59)
+        return false;
+    }
+  if (i != s.size ())
+    return false;
+
+  struct timespec now = now_timespec ();
+  struct tm tm;
+  if (!localtime_r (&now.tv_sec, &tm))
+    return false;
+
+  tm.tm_min = minute;
+  tm.tm_sec = second;
+  tm.tm_isdst = -1;
+  time_t t = mktime (&tm);
+  if (t == (time_t) -1)
+    return false;
+  if ((long long) t <= (long long) now.tv_sec)
+    {
+      tm.tm_hour++;
+      tm.tm_isdst = -1;
+      t = mktime (&tm);
+      if (t == (time_t) -1)
+        return false;
+    }
+
+  out->tv_sec = t;
+  out->tv_nsec = 0;
   return true;
 }
 
@@ -282,7 +349,8 @@ main (int argc, char **argv)
     }
 
   struct timespec target;
-  if (!parse_datetime (&target, time_str.c_str (), nullptr))
+  if (!next_minute_of_hour (time_str, &target)
+      && !parse_datetime (&target, time_str.c_str (), nullptr))
     {
       fprintf (stderr, "atf: cannot parse time '%s'\n", time_str.c_str ());
       return 2;

@@ -26,6 +26,7 @@ Handled by gnulib's `parse-datetime` (the parser used by GNU `at` and
 | Input | Meaning |
 | --- | --- |
 | `23:00`, `4pm`, `0200`, `noon`, `midnight` | clock time |
+| `:55`, `:55:30` | next time the clock reaches that minute/second |
 | `2026-10-26 23:00+07:00`, `2026-10-26T23:00:00Z` | ISO 8601 with offset |
 | `tomorrow 23:00`, `next monday`, `2 days ago` | relative words |
 | `+2 hours`, `+90 minutes` | relative to now |
@@ -34,6 +35,9 @@ Handled by gnulib's `parse-datetime` (the parser used by GNU `at` and
 
 A bare clock time that has already passed means the next day (like `at`).
 An explicitly dated time in the past is an error unless `-f` is given.
+`:MM[:SS]` is an atf shorthand for the next occurrence of that minute
+within the hour, which the date grammar cannot express; it is computed in
+the selected time zone.
 
 Times without an explicit offset use the `TZ` environment variable, and an
 explicit offset always wins over `TZ`:

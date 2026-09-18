@@ -70,6 +70,34 @@ else
     t_fail "relative +1 hour (delta=${delta}s)"
 fi
 
+# ":MM[:SS]" shorthand: next occurrence within the hour, in TZ.
+for spec in ":55" ":55:30"; do
+    case "$spec" in
+        ":55") want_utc_min=55; want_utc_sec=0 ;;
+        *) want_utc_min=55; want_utc_sec=30 ;;
+    esac
+    want=$((want_utc_min * 60 + want_utc_sec))
+    now3=$("$ATF" -p now)
+    mark=$(TZ=UTC "$ATF" -p "$spec" 2>/dev/null)
+    if [ -n "$mark" ] && [ "$mark" -gt "$((now3 - 1))" ] \
+       && [ $((mark - now3)) -le 3601 ] && [ $((mark % 3600)) -eq "$want" ]; then
+        t_ok
+    else
+        t_fail "'$spec' targets next occurrence (mark=$mark now=$now3)"
+    fi
+done
+
+# TZ offsets with minutes shift the UTC epoch of the mark.
+mark=$(TZ=Asia/Kathmandu "$ATF" -p ":55" 2>/dev/null)
+if [ -n "$mark" ] && [ $((mark % 3600)) -eq 600 ]; then
+    t_ok
+else
+    t_fail "':55' honors TZ offset (mark=$mark)"
+fi
+
+run_rc "minute out of range" 2 "$ATF" -p ":60"
+run_rc "junk after shorthand" 2 "$ATF" -p ":5x"
+
 echo "== timezone =="
 check_eq "TZ=Asia/Bangkok" 1793030400 \
     "$(TZ=Asia/Bangkok "$ATF" -p "2026-10-26 23:00")"
