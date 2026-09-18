@@ -171,6 +171,27 @@ esac
 err=$("$ATF" -q "+1 second" -- true 2>&1 >/dev/null)
 check_eq "quiet suppresses status" "" "$err"
 
+# --pretty falls back to one line when stderr is not a terminal.
+err=$("$ATF" --pretty "+1 second" -- true 2>&1 >/dev/null)
+case "$err" in
+    *"waiting until"*) t_ok ;;
+    *) t_fail "pretty falls back off-terminal (stderr='$err')" ;;
+esac
+
+err=$("$ATF" -q --pretty "+1 second" -- true 2>&1 >/dev/null)
+check_eq "quiet beats pretty" "" "$err"
+
+if command -v script >/dev/null 2>&1; then
+    pty=$(script -qec "$ATF --pretty '+1 second' -- true" /dev/null 2>/dev/null \
+          | tr '\r' '\n')
+    case "$pty" in
+        *"%"*) t_ok ;;
+        *) t_fail "pretty draws a progress line on a terminal" ;;
+    esac
+else
+    echo "skip: script(1) unavailable, not testing the pty progress bar"
+fi
+
 "$ATF" -q "+30 seconds" &
 pid=$!
 sleep 1

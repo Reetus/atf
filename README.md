@@ -58,9 +58,14 @@ atf [OPTION]... TIME [-- COMMAND [ARG]...]
   -q, --quiet       do not print the status line
   -p, --print       print the target Unix time and exit
   -f, --force       if TIME is in the past, run immediately
+  -P, --pretty      live countdown bar on a terminal (alias --progress)
   -h, --help        display help and exit
   -v, --version     output version information and exit
 ```
+
+`--pretty` redraws a single status line once per second with a progress bar
+and the time remaining; when stderr is not a terminal (pipes, logs) it falls
+back to the plain status line. `-q` suppresses all status output.
 
 Options must come before `TIME`; everything between `TIME` and `--` is
 joined with spaces, so multi-word times work without quoting if you prefer:

@@ -15,7 +15,9 @@
 #include <vector>
 
 #include <signal.h>
+#include <sys/ioctl.h>
 #include <time.h>
+#include <unistd.h>
 
 #ifndef ATF_VERSION
 #define ATF_VERSION "0.1.0"
@@ -30,6 +32,7 @@ struct Options {
   bool quiet = false;
   bool print_only = false;
   bool force = false;
+  bool pretty = false;
 };
 
 volatile sig_atomic_t g_signal = 0;
@@ -79,6 +82,8 @@ usage (FILE *out)
     "  -q, --quiet       do not print the status line\n"
     "  -p, --print       print the target Unix time and exit\n"
     "  -f, --force       if TIME is in the past, run immediately\n"
+    "  -P, --pretty      live countdown bar on a terminal (alias --progress;\n"
+    "                    falls back to the plain status line off-terminal)\n"
     "  -h, --help        display this help and exit\n"
     "  -v, --version     output version information and exit\n"
     "\n"
@@ -283,6 +288,119 @@ wait_until (struct timespec target)
     }
 }
 
+int
+terminal_width (int fd)
+{
+  struct winsize ws;
+  if (ioctl (fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+    return ws.ws_col;
+  return 80;
+}
+
+bool
+locale_utf8 ()
+{
+  char const *env = getenv ("LC_ALL");
+  if (!env || !*env)
+    env = getenv ("LC_CTYPE");
+  if (!env || !*env)
+    env = getenv ("LANG");
+  if (!env)
+    return false;
+  std::string s = lower (env);
+  return s.find ("utf-8") != std::string::npos
+         || s.find ("utf8") != std::string::npos;
+}
+
+void
+erase_progress ()
+{
+  fputs ("\r\033[K", stderr);
+  fflush (stderr);
+}
+
+// Redraw the single progress line, overwriting the previous one with \r.
+void
+draw_progress (struct timespec start, struct timespec target,
+               struct timespec now, bool utf8)
+{
+  long long total_ns = (long long) (target.tv_sec - start.tv_sec) * 1000000000LL
+                       + (target.tv_nsec - start.tv_nsec);
+  long long done_ns = (long long) (now.tv_sec - start.tv_sec) * 1000000000LL
+                      + (now.tv_nsec - start.tv_nsec);
+  int pct = total_ns > 0 ? (int) (done_ns * 100 / total_ns) : 100;
+  if (pct < 0)
+    pct = 0;
+  if (pct > 100)
+    pct = 100;
+
+  long long remain_ns = (long long) (target.tv_sec - now.tv_sec) * 1000000000LL
+                        + (target.tv_nsec - now.tv_nsec);
+  long long remain = (remain_ns + 999999999LL) / 1000000000LL;
+
+  std::string suffix = " " + std::to_string (pct) + "% "
+                       + human_duration (remain);
+  std::string prefix = "atf: ";
+
+  int barw = terminal_width (STDERR_FILENO)
+             - (int) (prefix.size () + suffix.size ()) - 3;
+  if (barw > 30)
+    barw = 30;
+  if (barw < 5)
+    barw = 0;
+
+  std::string bar;
+  if (barw > 0)
+    {
+      int filled = (int) ((long long) barw * pct / 100);
+      char const *full = utf8 ? "\u2588" : "#";
+      char const *empty = utf8 ? "\u2591" : "-";
+      bar.reserve ((size_t) barw * 4 + 2);
+      bar = "[";
+      for (int i = 0; i < barw; i++)
+        bar += (i < filled ? full : empty);
+      bar += "]";
+    }
+
+  fprintf (stderr, "\r\033[K%s%s%s", prefix.c_str (), bar.c_str (),
+           suffix.c_str ());
+  fflush (stderr);
+}
+
+// Wait like wait_until, but redraw a progress line once per second.
+int
+wait_until_pretty (struct timespec start, struct timespec target)
+{
+  bool utf8 = locale_utf8 ();
+  for (;;)
+    {
+      if (g_signal)
+        {
+          erase_progress ();
+          fprintf (stderr, "atf: interrupted by signal %d\n", (int) g_signal);
+          return 128 + (int) g_signal;
+        }
+      struct timespec now = now_timespec ();
+      if (compare_timespec (now, target) >= 0)
+        break;
+      draw_progress (start, target, now, utf8);
+      struct timespec tick = now;
+      tick.tv_sec++;
+      if (compare_timespec (tick, target) > 0)
+        tick = target;
+      int r = clock_nanosleep (CLOCK_REALTIME, TIMER_ABSTIME, &tick, nullptr);
+      if (r != 0 && r != EINTR)
+        {
+          erase_progress ();
+          errno = r;
+          perror ("atf: clock_nanosleep");
+          return 2;
+        }
+    }
+  erase_progress ();
+  return 0;
+}
+
 } // namespace
 
 int
@@ -308,6 +426,8 @@ main (int argc, char **argv)
         opt.print_only = true;
       else if (a == "-f" || a == "--force")
         opt.force = true;
+      else if (a == "-P" || a == "--pretty" || a == "--progress")
+        opt.pretty = true;
       else if (a == "-h" || a == "--help")
         {
           usage (stdout);
@@ -399,14 +519,17 @@ main (int argc, char **argv)
 
   if (!immediate)
     {
-      if (!opt.quiet)
+      // The progress bar needs a terminal to redraw; off-terminal (logs,
+      // pipes) fall back to the single status line.
+      bool progress = opt.pretty && !opt.quiet && isatty (STDERR_FILENO);
+      if (!opt.quiet && !progress)
         {
           long long secs = (long long) target.tv_sec - (long long) now.tv_sec;
           fprintf (stderr, "atf: waiting until %s (in %s)\n",
                    human_time (target.tv_sec).c_str (),
                    human_duration (secs).c_str ());
         }
-      int rc = wait_until (target);
+      int rc = progress ? wait_until_pretty (now, target) : wait_until (target);
       if (rc != 0)
         return rc;
     }
