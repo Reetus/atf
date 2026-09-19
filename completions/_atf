@@ -1,0 +1,12 @@
+#compdef atf
+
+_arguments -s \
+    '(-q --quiet)'{-q,--quiet}'[do not print the status line]' \
+    '(-p --print)'{-p,--print}'[print the target Unix time and exit]' \
+    '(-f --force)'{-f,--force}'[run immediately if TIME is in the past]' \
+    '(-P --pretty --progress)'{-P,--pretty,--progress}'[live countdown bar]' \
+    '(-e --every)'{-e,--every}'[run COMMAND repeatedly]:interval:' \
+    '(-h --help)'{-h,--help}'[display help and exit]' \
+    '(-v --version)'{-v,--version}'[output version information and exit]' \
+    '1:time:(now noon midnight tomorrow today :00 :15 :30 :45)' \
+    '*::command:_normal'

@@ -12,6 +12,9 @@ VERSION := 0.1.0
 BUILD := build
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
+MANDIR ?= $(PREFIX)/share/man
+BASH_COMPLETION_DIR ?= $(PREFIX)/share/bash-completion/completions
+ZSH_COMPLETION_DIR ?= $(PREFIX)/share/zsh/site-functions
 
 VENDOR_DIR := third_party/parse-datetime
 COMPAT_DIR := third_party/compat
@@ -60,9 +63,15 @@ test-static: static
 
 install: atf
 	install -Dm755 atf $(DESTDIR)$(BINDIR)/atf
+	install -Dm644 atf.1 $(DESTDIR)$(MANDIR)/man1/atf.1
+	install -Dm644 completions/atf.bash $(DESTDIR)$(BASH_COMPLETION_DIR)/atf
+	install -Dm644 completions/_atf $(DESTDIR)$(ZSH_COMPLETION_DIR)/_atf
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/atf
+	rm -f $(DESTDIR)$(MANDIR)/man1/atf.1
+	rm -f $(DESTDIR)$(BASH_COMPLETION_DIR)/atf
+	rm -f $(DESTDIR)$(ZSH_COMPLETION_DIR)/_atf
 
 clean:
 	rm -rf $(BUILD) atf

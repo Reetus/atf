@@ -1,0 +1,155 @@
+.TH ATF 1 "September 2026" "atf 0.1.0" "User Commands"
+.SH NAME
+atf \- run a command at a specified time, in the foreground
+.SH SYNOPSIS
+.B atf
+[\fIOPTION\fR]... [\fITIME\fR] [\fB\-\-\fR \fICOMMAND\fR [\fIARG\fR]...]
+.SH DESCRIPTION
+.B atf
+waits until a loosely specified time, then runs
+.IR COMMAND ,
+or exits like
+.BR sleep (1)
+when no command is given.
+It stays in the foreground, so it can be chained in scripts:
+.PP
+.RS 4
+atf 23:00 && echo done
+.RE
+.PP
+Times without an explicit offset are interpreted in the
+.B TZ
+environment's time zone. Explicit offsets in
+.I TIME
+win over
+.BR TZ .
+.PP
+The wait uses an absolute realtime clock, so NTP steps and
+suspend/resume on laptops behave correctly: the command runs at the
+requested wall-clock time.
+.SH OPTIONS
+.TP
+.BR \-q ", " \-\-quiet
+Do not print the status line.
+.TP
+.BR \-p ", " \-\-print
+Print the target Unix time and exit without waiting.
+.TP
+.BR \-f ", " \-\-force
+If
+.I TIME
+is in the past, run immediately instead of refusing.
+.TP
+.BR \-P ", " \-\-pretty ", " \-\-progress
+Draw a live one-line countdown with a progress bar and time remaining.
+Falls back to the plain status line when standard error is not a
+terminal. Suppressed by
+.BR \-q .
+.TP
+.BR \-e ", " \-\-every " \fIN\fR"
+Run
+.I COMMAND
+every
+.IR N ,
+forever: wait, run, wait, run. The first run is at
+.IR TIME ,
+or immediately when
+.I TIME
+is omitted. The loop stops only on a signal; a failing command does not
+stop it. Requires a
+.IR COMMAND .
+.TP
+.BR \-h ", " \-\-help
+Display help and exit.
+.TP
+.BR \-v ", " \-\-version
+Output version information and exit.
+.SH TIME FORMAT
+.I TIME
+is parsed with the same grammar as GNU
+.BR date (1)
+and
+.BR at (1)
+(gnulib's parse-datetime). Examples:
+.PP
+.RS 4
+.nf
+23:00, 4pm, 0200, midnight   clock time; rolls to tomorrow if past
+:55, :55:30                 next time the clock reaches that mark
+2026-10-26 23:00+07:00      explicit UTC offset
+2026-10-26T23:00:00Z        ISO 8601
+tomorrow 23:00, next monday relative words
++2 hours, 2 days ago        relative to now
+90s, 2h30m, 1d, 250ms       duration from now
+@1800000000                 seconds since the Unix epoch
+now                         run immediately
+.fi
+.RE
+.PP
+A clock time with no date part that is already past means the next
+day. An explicitly dated time in the past is an error unless
+.B \-f
+is given.
+.SH ENVIRONMENT
+.TP
+.B TZ
+Time zone used for times without an explicit offset, for example:
+.PP
+.RS 4
+TZ=Asia/Bangkok atf 23:00 -- cmd
+.RE
+.SH EXIT STATUS
+The exit status is that of
+.IR COMMAND ,
+or 0 when there is no command. With
+.BR \-e ,
+the loop only exits on a signal, reporting 128 plus the signal number.
+Otherwise:
+.TP
+.B 1
+An explicitly dated
+.I TIME
+is in the past and
+.B \-f
+was not given.
+.TP
+.B 2
+Usage or time-parse error, or a failed system call.
+.TP
+.B 126
+.I COMMAND
+was found but could not be executed.
+.TP
+.B 127
+.I COMMAND
+was not found.
+.TP
+.B 128+\fIN\fR
+Terminated by signal
+.IR N .
+.SH EXAMPLES
+Run a backup later tonight, and only chain when it starts:
+.PP
+.RS 4
+.nf
+atf 23:00 -- tar \-czf /backup/home.tgz /home
+atf tomorrow 06:30 -- ./deploy.sh
+atf +2 hours                # just wait, like sleep 7200
+atf :30 -- ./poll.sh        # every hour at :30
+atf \-e 5m -- ./health.sh   # every 5 minutes from now
+atf \-P '2027-01-01 00:00'  # pretty countdown to the new year
+.fi
+.RE
+.PP
+Shell syntax needs an explicit shell:
+.PP
+.RS 4
+atf \+1h -- sh \-c 'make && ./deploy.sh'
+.RE
+.SH SEE ALSO
+.BR at (1),
+.BR date (1),
+.BR sleep (1),
+.BR watch (1),
+.BR timeout (1),
+.BR cron (8)

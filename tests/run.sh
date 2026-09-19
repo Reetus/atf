@@ -70,6 +70,20 @@ else
     t_fail "relative +1 hour (delta=${delta}s)"
 fi
 
+# Duration shorthand: w/d/h/m/s/ms, combinable, whitespace allowed.
+for spec_secs in "90s:90" "2h30m:9000" "1h 15m:4500" "1w:604800" "1m:60" "250ms:0"; do
+    spec=${spec_secs%:*}
+    want=${spec_secs#*:}
+    base=$("$ATF" -p now)
+    got=$("$ATF" -p "$spec" 2>/dev/null)
+    d=$((got - base))
+    if [ "$d" -ge "$want" ] && [ "$d" -le "$((want + 3))" ]; then
+        t_ok
+    else
+        t_fail "duration '$spec' (delta=${d}s, want ~${want})"
+    fi
+done
+
 # ":MM[:SS]" shorthand: next occurrence within the hour, in TZ.
 for spec in ":55" ":55:30"; do
     case "$spec" in
@@ -198,6 +212,84 @@ sleep 1
 kill -INT "$pid" 2>/dev/null
 wait "$pid"
 check_eq "SIGINT exits 128+2" 130 "$?"
+
+echo "== every =="
+run_rc "--every needs a command" 2 "$ATF" -e 1m
+run_rc "--every rejects a bad interval" 2 "$ATF" -e 1q -- true
+run_rc "--every= form accepted" 0 "$ATF" --every=1h -p now
+
+first=$("$ATF" -e 1h -p "23:00" 2>/dev/null)
+nowe=$("$ATF" -p now)
+if [ -n "$first" ] && [ "$first" -gt "$nowe" ]; then
+    t_ok
+else
+    t_fail "-e -p prints the first target (first=$first now=$nowe)"
+fi
+
+# The loop runs repeatedly until interrupted.
+tmp=$(mktemp)
+"$ATF" -e 500ms -- sh -c 'echo tick' >"$tmp" 2>/dev/null &
+pid=$!
+sleep 2.2
+kill -INT "$pid" 2>/dev/null
+wait "$pid"
+rc=$?
+ticks=$(grep -c tick "$tmp")
+rm -f "$tmp"
+if [ "$rc" -eq 130 ] && [ "$ticks" -ge 3 ]; then
+    t_ok
+else
+    t_fail "--every repeats and stops on SIGINT (rc=$rc ticks=$ticks)"
+fi
+
+# Without TIME the first run is immediate.
+tmp=$(mktemp)
+"$ATF" -e 1h -- echo boot >"$tmp" 2>/dev/null &
+pid=$!
+sleep 0.3
+if grep -q boot "$tmp"; then t_ok; else t_fail "--every without TIME starts now"; fi
+kill -INT "$pid" 2>/dev/null
+wait "$pid" 2>/dev/null
+rm -f "$tmp"
+
+# A first target in the past must not spin catching up through missed slots.
+tmp=$(mktemp)
+started=$("$ATF" -p now)
+"$ATF" -e 1h "2020-01-01" -- echo stale >"$tmp" 2>/dev/null &
+pid=$!
+sleep 0.5
+finished=$("$ATF" -p now)
+if grep -q stale "$tmp" && [ $((finished - started)) -le 3 ]; then
+    t_ok
+else
+    t_fail "--every with past TIME starts immediately (elapsed=$((finished - started))s)"
+fi
+kill -INT "$pid" 2>/dev/null
+wait "$pid" 2>/dev/null
+rm -f "$tmp"
+
+echo "== install =="
+root=$(CDPATH= cd -- "$(dirname -- "$ATF")" && pwd)
+dest=$(mktemp -d)
+if make -s -C "$root" install DESTDIR="$dest" PREFIX=/usr/local >/dev/null 2>&1; then
+    for f in usr/local/bin/atf \
+             usr/local/share/man/man1/atf.1 \
+             usr/local/share/bash-completion/completions/atf \
+             usr/local/share/zsh/site-functions/_atf; do
+        if [ -f "$dest/$f" ]; then t_ok; else t_fail "install missing $f"; fi
+    done
+else
+    t_fail "make install failed"
+fi
+rm -rf "$dest"
+
+if command -v bash >/dev/null 2>&1; then
+    if bash -n "$root/completions/atf.bash"; then
+        t_ok
+    else
+        t_fail "bash completion syntax"
+    fi
+fi
 
 echo "== CLI =="
 run_rc "no arguments" 2 "$ATF"

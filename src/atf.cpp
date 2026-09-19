@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,7 @@
 
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,6 +35,8 @@ struct Options {
   bool print_only = false;
   bool force = false;
   bool pretty = false;
+  bool every = false;
+  long long interval_ns = 0;
 };
 
 volatile sig_atomic_t g_signal = 0;
@@ -60,8 +64,9 @@ void
 usage (FILE *out)
 {
   fputs (
-    "Usage: atf [OPTION]... TIME [-- COMMAND [ARG]...]\n"
+    "Usage: atf [OPTION]... [TIME] [-- COMMAND [ARG]...]\n"
     "Wait until TIME, then run COMMAND; with no COMMAND, just exit.\n"
+    "With --every, TIME is optional and COMMAND runs repeatedly.\n"
     "\n"
     "TIME accepts the same loose grammar as GNU date -d / at, e.g.\n"
     "  23:00, 0200, midnight       today, or tomorrow if already past\n"
@@ -70,6 +75,7 @@ usage (FILE *out)
     "  2026-10-26T23:00:00Z        ISO 8601\n"
     "  'tomorrow 23:00'            relative words\n"
     "  '+2 hours'                  relative to now\n"
+    "  90s, 2h30m, 1d              duration from now\n"
     "  @1800000000                 seconds since the epoch\n"
     "  now                         run immediately\n"
     "\n"
@@ -84,6 +90,7 @@ usage (FILE *out)
     "  -f, --force       if TIME is in the past, run immediately\n"
     "  -P, --pretty      live countdown bar on a terminal (alias --progress;\n"
     "                    falls back to the plain status line off-terminal)\n"
+    "  -e, --every N     run COMMAND every N (e.g. 30s, 5m, 2h30m), forever\n"
     "  -h, --help        display this help and exit\n"
     "  -v, --version     output version information and exit\n"
     "\n"
@@ -110,6 +117,96 @@ lower (std::string s)
   for (char &c : s)
     c = (char) tolower ((unsigned char) c);
   return s;
+}
+
+// Parse a duration like "90s", "2h30m", "1h 15m", "1w2d", "250ms". Units
+// are w/d/h/m/s/ms and may repeat in any order; at least one component is
+// needed. Returns false for anything else, so clock times fall through to
+// the date parser. Capped at 100 years to keep later arithmetic sane.
+bool
+parse_duration (std::string s, long long *out_ns)
+{
+  const long long ms = 1000000LL;
+  const long long max_duration = 100LL * 366 * 86400 * 1000 * ms;
+  s = lower (trim (s));
+  if (s.empty ())
+    return false;
+
+  long long total = 0;
+  size_t i = 0;
+  while (i < s.size ())
+    {
+      while (i < s.size () && isspace ((unsigned char) s[i]))
+        i++;
+      if (i == s.size ())
+        break;
+      if (!isdigit ((unsigned char) s[i]))
+        return false;
+
+      long long v = 0;
+      while (i < s.size () && isdigit ((unsigned char) s[i]))
+        {
+          if (v > (LLONG_MAX - 9) / 10)
+            return false;
+          v = v * 10 + (s[i] - '0');
+          i++;
+        }
+      if (i == s.size ())
+        return false;
+
+      long long mult;
+      if (s[i] == 'm' && i + 1 < s.size () && s[i + 1] == 's')
+        {
+          mult = ms;
+          i += 2;
+        }
+      else
+        {
+          switch (s[i])
+            {
+            case 'w':
+              mult = 7 * 86400 * 1000 * ms;
+              break;
+            case 'd':
+              mult = 86400 * 1000 * ms;
+              break;
+            case 'h':
+              mult = 3600 * 1000 * ms;
+              break;
+            case 'm':
+              mult = 60 * 1000 * ms;
+              break;
+            case 's':
+              mult = 1000 * ms;
+              break;
+            default:
+              return false;
+            }
+          i++;
+        }
+
+      if (v > (LLONG_MAX - total) / mult)
+        return false;
+      total += v * mult;
+      if (total > max_duration)
+        return false;
+    }
+
+  *out_ns = total;
+  return true;
+}
+
+// Add a nanosecond duration to a timespec, normalizing tv_nsec.
+void
+add_duration (struct timespec *t, long long ns)
+{
+  t->tv_sec += ns / 1000000000LL;
+  t->tv_nsec += ns % 1000000000LL;
+  if (t->tv_nsec >= 1000000000LL)
+    {
+      t->tv_sec++;
+      t->tv_nsec -= 1000000000LL;
+    }
 }
 
 // True when TIME consists only of clock-time tokens: "23:00", "4pm",
@@ -401,6 +498,90 @@ wait_until_pretty (struct timespec start, struct timespec target)
   return 0;
 }
 
+// Print the status for a wait and perform it, choosing --pretty or the
+// plain one-line status. The progress bar needs a terminal to redraw;
+// off-terminal (logs, pipes) falls back to the plain line.
+int
+wait_displayed (Options const &opt, struct timespec start,
+                struct timespec target)
+{
+  bool progress = opt.pretty && !opt.quiet && isatty (STDERR_FILENO);
+  if (!opt.quiet && !progress)
+    {
+      long long secs = (long long) target.tv_sec - (long long) start.tv_sec;
+      fprintf (stderr, "atf: waiting until %s (in %s)\n",
+               human_time (target.tv_sec).c_str (),
+               human_duration (secs).c_str ());
+    }
+  return progress ? wait_until_pretty (start, target) : wait_until (target);
+}
+
+// Run COMMAND every opt.interval_ns nanoseconds, forever, starting at target.
+// Unlike the single-run path this forks per run (execvp would replace the
+// loop), forwards termination signals to the child, and ignores the child's
+// exit status: only a signal stops the loop.
+int
+run_every (Options const &opt, struct timespec target, char **cmd,
+           int cmd_count)
+{
+  std::vector<char *> args (cmd, cmd + cmd_count);
+  args.push_back (nullptr);
+
+  for (;;)
+    {
+      struct timespec now = now_timespec ();
+      if (compare_timespec (target, now) > 0)
+        {
+          int rc = wait_displayed (opt, now, target);
+          if (rc != 0)
+            return rc;
+        }
+      if (g_signal)
+        return 128 + (int) g_signal;
+
+      pid_t pid = fork ();
+      if (pid < 0)
+        {
+          perror ("atf: fork");
+          return 2;
+        }
+      if (pid == 0)
+        {
+          execvp (args[0], args.data ());
+          fprintf (stderr, "atf: %s: %s\n", args[0], strerror (errno));
+          _exit (errno == ENOENT ? 127 : 126);
+        }
+
+      int status;
+      pid_t r;
+      while ((r = waitpid (pid, &status, 0)) < 0)
+        {
+          if (errno != EINTR)
+            {
+              perror ("atf: waitpid");
+              return 2;
+            }
+          if (g_signal)
+            kill (pid, (int) g_signal);
+        }
+      if (g_signal)
+        return 128 + (int) g_signal;
+
+      // Next slot, strictly in the future. A first target in the past (or
+      // an overrunning command) skips missed slots rather than queueing
+      // them; compute the jump directly so a far-past target cannot spin.
+      now = now_timespec ();
+      if (compare_timespec (target, now) <= 0)
+        {
+          long long behind_ns
+            = (long long) (now.tv_sec - target.tv_sec) * 1000000000LL
+              + (now.tv_nsec - target.tv_nsec);
+          long long steps = behind_ns / opt.interval_ns + 1;
+          add_duration (&target, steps * opt.interval_ns);
+        }
+    }
+}
+
 } // namespace
 
 int
@@ -415,7 +596,10 @@ main (int argc, char **argv)
       std::string a = argv[i];
       if (a == "--")
         {
-          i++;
+          // End of options normally; with --every there is no required
+          // TIME, so leave the -- for the TIME/COMMAND split below.
+          if (!opt.every)
+            i++;
           break;
         }
       if (a.empty () || a[0] != '-' || a == "-")
@@ -428,6 +612,20 @@ main (int argc, char **argv)
         opt.force = true;
       else if (a == "-P" || a == "--pretty" || a == "--progress")
         opt.pretty = true;
+      else if (a == "-e" || a == "--every"
+               || a.compare (0, 8, "--every=") == 0)
+        {
+          std::string value = a.compare (0, 8, "--every=") == 0
+                              ? a.substr (8)
+                              : (i + 1 < argc ? argv[++i] : "");
+          if (!parse_duration (value, &opt.interval_ns) || opt.interval_ns <= 0)
+            {
+              fprintf (stderr,
+                       "atf: --every needs a positive duration like 30s, 5m, 1h\n");
+              return 2;
+            }
+          opt.every = true;
+        }
       else if (a == "-h" || a == "--help")
         {
           usage (stdout);
@@ -461,24 +659,33 @@ main (int argc, char **argv)
       time_str += argv[j];
     }
 
-  if (time_str.empty ())
+  if (time_str.empty () && !opt.every)
     {
       fprintf (stderr, "atf: missing TIME\n");
       usage (stderr);
       return 2;
     }
 
+  struct timespec now = now_timespec ();
+
+  long long duration_ns = 0;
   struct timespec target;
-  if (!next_minute_of_hour (time_str, &target)
-      && !parse_datetime (&target, time_str.c_str (), nullptr))
+  if (time_str.empty ())
+    target = now; // --every without TIME: start immediately
+  else if (parse_duration (time_str, &duration_ns))
+    {
+      target = now;
+      add_duration (&target, duration_ns);
+    }
+  else if (!next_minute_of_hour (time_str, &target)
+           && !parse_datetime (&target, time_str.c_str (), nullptr))
     {
       fprintf (stderr, "atf: cannot parse time '%s'\n", time_str.c_str ());
       return 2;
     }
 
-  struct timespec now = now_timespec ();
   bool immediate = false;
-  if (compare_timespec (target, now) <= 0)
+  if (!opt.every && compare_timespec (target, now) <= 0)
     {
       // A relative expression like "now" lands a hair in the past because
       // parsing takes time; treat that as immediate.
@@ -517,19 +724,19 @@ main (int argc, char **argv)
       return 0;
     }
 
+  if (opt.every)
+    {
+      if (cmd_index >= argc)
+        {
+          fprintf (stderr, "atf: --every requires a COMMAND\n");
+          return 2;
+        }
+      return run_every (opt, target, &argv[cmd_index], argc - cmd_index);
+    }
+
   if (!immediate)
     {
-      // The progress bar needs a terminal to redraw; off-terminal (logs,
-      // pipes) fall back to the single status line.
-      bool progress = opt.pretty && !opt.quiet && isatty (STDERR_FILENO);
-      if (!opt.quiet && !progress)
-        {
-          long long secs = (long long) target.tv_sec - (long long) now.tv_sec;
-          fprintf (stderr, "atf: waiting until %s (in %s)\n",
-                   human_time (target.tv_sec).c_str (),
-                   human_duration (secs).c_str ());
-        }
-      int rc = progress ? wait_until_pretty (now, target) : wait_until (target);
+      int rc = wait_displayed (opt, now, target);
       if (rc != 0)
         return rc;
     }
