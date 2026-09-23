@@ -10,6 +10,7 @@
 
 VERSION := 0.1.0
 BUILD := build
+ARCH ?= $(shell dpkg --print-architecture 2>/dev/null || uname -m)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
@@ -32,7 +33,7 @@ endif
 OBJS := $(BUILD)/parse-datetime.o $(BUILD)/c-ctype.o $(BUILD)/gettime.o \
         $(BUILD)/compat.o $(BUILD)/atf.o
 
-.PHONY: all static test test-static install uninstall clean
+.PHONY: all static test test-static install uninstall clean deb
 
 all: atf
 
@@ -72,6 +73,12 @@ uninstall:
 	rm -f $(DESTDIR)$(MANDIR)/man1/atf.1
 	rm -f $(DESTDIR)$(BASH_COMPLETION_DIR)/atf
 	rm -f $(DESTDIR)$(ZSH_COMPLETION_DIR)/_atf
+
+# Build a fully static binary and package it as a .deb with dpkg-deb only.
+# The result has no runtime dependencies and installs on Debian and Ubuntu
+# of the same architecture.
+deb: static
+	VERSION=$(VERSION) ARCH=$(ARCH) tools/make-deb.sh
 
 clean:
 	rm -rf $(BUILD) atf

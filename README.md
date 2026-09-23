@@ -108,11 +108,30 @@ make            # dynamic ./atf
 make static     # fully static ./atf: no runtime dependencies
 make test       # functional test suite
 make install    # binary, man page, bash/zsh completions (PREFIX=/usr/local)
+make deb        # fully static .deb in dist/
 ```
 
 The static binary is self-contained (no libc, libstdc++, or GNU `date`
 dependency at runtime) and can be copied between Ubuntu machines or between
 distro versions. Build on each architecture you need (`x86_64`, `arm64`, …).
+
+## Packaging
+
+```sh
+make deb        # dist/atf_<version>_<arch>.deb
+sudo dpkg -i dist/atf_0.1.0_amd64.deb
+```
+
+`make deb` builds the static binary and packages it with `dpkg-deb` alone —
+no debhelper, fakeroot, or root required. Because the binary is statically
+linked the package declares no runtime dependencies, so one build installs
+on both Debian and Ubuntu (and their releases) of the same architecture;
+rebuild on each architecture you target. The package ships the binary, the
+man page, and bash/zsh completions.
+
+Maintainer metadata comes from `git config user.name`/`user.email`, and can
+be overridden with `DEB_MAINTAINER='Name <mail>'`. Version and architecture
+can be overridden with `VERSION=` and `ARCH=`.
 
 ## Layout
 

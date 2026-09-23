@@ -291,6 +291,39 @@ if command -v bash >/dev/null 2>&1; then
     fi
 fi
 
+echo "== deb =="
+if command -v dpkg-deb >/dev/null 2>&1; then
+    if sh -n "$root/tools/make-deb.sh"; then t_ok; else t_fail "make-deb.sh syntax"; fi
+
+    deb=$(VERSION=0.0.0-test "$root/tools/make-deb.sh" 2>/dev/null | tail -1)
+    if [ -n "$deb" ] && [ -f "$deb" ]; then
+        t_ok
+    else
+        t_fail "make-deb produced no package"
+    fi
+    if dpkg-deb --contents "$deb" 2>/dev/null | grep -q 'usr/bin/atf'; then
+        t_ok
+    else
+        t_fail "deb contains usr/bin/atf"
+    fi
+    if [ -z "$(dpkg-deb -f "$deb" Depends 2>/dev/null || true)" ]; then
+        t_ok
+    else
+        t_fail "static deb should declare no Depends"
+    fi
+
+    x=$(mktemp -d)
+    dpkg-deb -x "$deb" "$x"
+    if "$x/usr/bin/atf" --version >/dev/null 2>&1; then
+        t_ok
+    else
+        t_fail "binary from the deb runs"
+    fi
+    rm -rf "$x" "$deb"
+else
+    echo "skip: dpkg-deb unavailable, not testing .deb packaging"
+fi
+
 echo "== CLI =="
 run_rc "no arguments" 2 "$ATF"
 run_rc "unknown option" 2 "$ATF" -z now
