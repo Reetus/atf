@@ -70,8 +70,10 @@ else
     t_fail "relative +1 hour (delta=${delta}s)"
 fi
 
-# Duration shorthand: w/d/h/m/s/ms, combinable, whitespace allowed.
-for spec_secs in "90s:90" "2h30m:9000" "1h 15m:4500" "1w:604800" "1m:60" "250ms:0"; do
+# Duration shorthand: w/d/h/m/s/ms, fractional values, combinable,
+# whitespace allowed.
+for spec_secs in "90s:90" "2.5s:2" "0.5m:30" "1.5h:5400" ".25s:0" \
+                 "2h30m:9000" "1h 15m:4500" "1w:604800" "1m:60" "250ms:0"; do
     spec=${spec_secs%:*}
     want=${spec_secs#*:}
     base=$("$ATF" -p now)
@@ -217,6 +219,7 @@ echo "== every =="
 run_rc "--every needs a command" 2 "$ATF" -e 1m
 run_rc "--every rejects a bad interval" 2 "$ATF" -e 1q -- true
 run_rc "--every= form accepted" 0 "$ATF" --every=1h -p now
+run_rc "--every fractional interval" 0 "$ATF" --every=2.5s -p now
 
 first=$("$ATF" -e 1h -p "23:00" 2>/dev/null)
 nowe=$("$ATF" -p now)

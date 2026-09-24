@@ -75,7 +75,7 @@ usage (FILE *out)
     "  2026-10-26T23:00:00Z        ISO 8601\n"
     "  'tomorrow 23:00'            relative words\n"
     "  '+2 hours'                  relative to now\n"
-    "  90s, 2h30m, 1d              duration from now\n"
+    "  90s, 2.5s, 2h30m, 1d        duration from now\n"
     "  @1800000000                 seconds since the epoch\n"
     "  now                         run immediately\n"
     "\n"
@@ -119,8 +119,9 @@ lower (std::string s)
   return s;
 }
 
-// Parse a duration like "90s", "2h30m", "1h 15m", "1w2d", "250ms". Units
-// are w/d/h/m/s/ms and may repeat in any order; at least one component is
+// Parse a duration like "90s", "2h30m", "1h 15m", "1w2d", "250ms", "2.5s",
+// ".5h". Numbers may be fractional (up to nanosecond precision); units are
+// w/d/h/m/s/ms and may repeat in any order; at least one component is
 // needed. Returns false for anything else, so clock times fall through to
 // the date parser. Capped at 100 years to keep later arithmetic sane.
 bool
@@ -140,18 +141,34 @@ parse_duration (std::string s, long long *out_ns)
         i++;
       if (i == s.size ())
         break;
-      if (!isdigit ((unsigned char) s[i]))
-        return false;
 
-      long long v = 0;
+      long long int_part = 0;
+      long long frac = 0;
+      int frac_digits = 0;
+      bool any_digits = false;
       while (i < s.size () && isdigit ((unsigned char) s[i]))
         {
-          if (v > (LLONG_MAX - 9) / 10)
+          if (int_part > (LLONG_MAX - 9) / 10)
             return false;
-          v = v * 10 + (s[i] - '0');
+          int_part = int_part * 10 + (s[i] - '0');
           i++;
+          any_digits = true;
         }
-      if (i == s.size ())
+      if (i < s.size () && s[i] == '.')
+        {
+          i++;
+          while (i < s.size () && isdigit ((unsigned char) s[i]))
+            {
+              if (frac_digits < 9)
+                {
+                  frac = frac * 10 + (s[i] - '0');
+                  frac_digits++;
+                }
+              i++;
+              any_digits = true;
+            }
+        }
+      if (!any_digits || i == s.size ())
         return false;
 
       long long mult;
@@ -185,11 +202,14 @@ parse_duration (std::string s, long long *out_ns)
           i++;
         }
 
-      if (v > (LLONG_MAX - total) / mult)
+      long long den = 1;
+      for (int k = 0; k < frac_digits; k++)
+        den *= 10;
+      __int128 part = (__int128) int_part * mult
+                      + (__int128) frac * mult / den;
+      if (part > max_duration - total)
         return false;
-      total += v * mult;
-      if (total > max_duration)
-        return false;
+      total += (long long) part;
     }
 
   *out_ns = total;

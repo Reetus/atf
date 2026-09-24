@@ -31,7 +31,7 @@ Handled by gnulib's `parse-datetime` (the parser used by GNU `at` and
 | `2026-10-26 23:00+07:00`, `2026-10-26T23:00:00Z` | ISO 8601 with offset |
 | `tomorrow 23:00`, `next monday`, `2 days ago` | relative words |
 | `+2 hours`, `+90 minutes` | relative to now |
-| `90s`, `2h30m`, `1d`, `250ms` | duration from now |
+| `90s`, `2.5s`, `2h30m`, `1d`, `250ms` | duration from now |
 | `@1800000000` | seconds since the epoch |
 | `now` | run immediately |
 
